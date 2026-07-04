@@ -2,7 +2,9 @@
 
 from fastapi import APIRouter
 
+from app.api.v1.policies import router as policies_router
 from app.api.v1.registry import router as registry_router
 
 api_router = APIRouter()
 api_router.include_router(registry_router)
+api_router.include_router(policies_router)
