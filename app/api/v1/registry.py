@@ -21,13 +21,12 @@ router = APIRouter(prefix="/registry", tags=["registry"])
 
 
 class StatusOverride(BaseModel):
-    """Payload for manually overriding a service health status.
+    """Payload for manually overriding a service's health status.
 
-    Acts like an administrative shutdown command — forces the routing
-    engine to treat this service as the specified status until the next
-    health-check cycle overwrites it. When restoring to HEALTHY, the
-    consecutive failure counter is also reset so the service is not
-    immediately demoted again on the next scheduler tick.
+    Useful for controlled failover testing and administrative intervention —
+    the equivalent of 'shutdown' / 'no shutdown' on a network interface.
+    The override is temporary: the next health-check cycle will re-evaluate
+    and update the status based on the service's actual response.
     """
 
     status: ServiceStatus
@@ -35,13 +34,19 @@ class StatusOverride(BaseModel):
 
 @router.post("", response_model=ServiceRead, status_code=status.HTTP_201_CREATED)
 async def register_service(payload: ServiceCreate, db: AsyncSession = Depends(get_db)) -> Service:
-    """Register a new service with the control plane."""
+    """Register a new service with the control plane.
+
+    The service starts in UNKNOWN status until the next health-check
+    cycle runs, at which point it is promoted to HEALTHY, DEGRADED, or
+    UNHEALTHY based on its actual response.
+    """
     existing = await db.scalar(select(Service).where(Service.name == payload.name))
     if existing is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"A service named '{payload.name}' is already registered.",
         )
+
     service = Service(
         name=payload.name,
         base_url=str(payload.base_url),
@@ -81,23 +86,26 @@ async def get_service(service_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     return service
 
 
-@router.patch("/{service_id}/status", response_model=ServiceRead)
+@router.patch("/{service_id}/status", response_model=ServiceRead, tags=["registry"])
 async def override_service_status(
     service_id: uuid.UUID,
     payload: StatusOverride,
     db: AsyncSession = Depends(get_db),
 ) -> Service:
-    """Manually override a service health status.
+    """Manually override a service's health status.
 
-    Primarily used for controlled failover testing and emergency
-    intervention. The override persists until the next health-check
-    cycle re-evaluates the service.
+    Acts like an administrative 'shutdown' command — forces the routing
+    engine to treat this service as the specified status until the next
+    health-check cycle overwrites it. Primarily used for controlled
+    failover testing and emergency intervention.
     """
     service = await db.get(Service, service_id)
     if service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found.")
 
     service.status = payload.status
+    # Reset failure counter when an admin manually restores a service,
+    # so it doesn't immediately get demoted again on the next check cycle.
     if payload.status == ServiceStatus.HEALTHY:
         service.consecutive_failures = 0
         service.last_error = None
@@ -109,7 +117,7 @@ async def override_service_status(
 
 @router.delete("/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def deregister_service(service_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> None:
-    """Remove a service from the registry."""
+    """Remove a service from the registry. It will no longer be health-checked or routed to."""
     service = await db.get(Service, service_id)
     if service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found.")

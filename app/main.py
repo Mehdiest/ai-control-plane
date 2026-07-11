@@ -15,7 +15,6 @@ from fastapi import FastAPI
 
 from app.api.v1 import api_router
 from app.core.config import get_settings
-from app.core.database import init_db
 from app.models import policy as _policy_model  # noqa: F401 — registers table with Base.metadata
 from app.models import service as _service_model  # noqa: F401 — registers table with Base.metadata
 from app.services.health_checker import create_scheduler
@@ -28,9 +27,11 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Initialize the database and start the health-check scheduler on startup."""
-    await init_db()
+    """Start the health-check scheduler on startup.
 
+    Database schema management is handled by Alembic migrations.
+    Run ``alembic upgrade head`` before starting the application.
+    """
     scheduler = create_scheduler()
     scheduler.start()
     logger.info(
