@@ -1,10 +1,4 @@
-"""
-Service registry endpoints.
-
-Exposes CRUD operations for services the control plane governs, plus
-a summary view intended to back a dashboard. Health data is populated
-asynchronously by the background scheduler, not by these endpoints.
-"""
+"""Service registry endpoints."""
 
 import uuid
 
@@ -21,25 +15,14 @@ router = APIRouter(prefix="/registry", tags=["registry"])
 
 
 class StatusOverride(BaseModel):
-    """Payload for manually overriding a service's health status.
-
-    Useful for controlled failover testing and administrative intervention —
-    the equivalent of 'shutdown' / 'no shutdown' on a network interface.
-    The override is temporary: the next health-check cycle will re-evaluate
-    and update the status based on the service's actual response.
-    """
+    """Payload for manually overriding a service health status."""
 
     status: ServiceStatus
 
 
 @router.post("", response_model=ServiceRead, status_code=status.HTTP_201_CREATED)
 async def register_service(payload: ServiceCreate, db: AsyncSession = Depends(get_db)) -> Service:
-    """Register a new service with the control plane.
-
-    The service starts in UNKNOWN status until the next health-check
-    cycle runs, at which point it is promoted to HEALTHY, DEGRADED, or
-    UNHEALTHY based on its actual response.
-    """
+    """Register a new service with the control plane."""
     existing = await db.scalar(select(Service).where(Service.name == payload.name))
     if existing is not None:
         raise HTTPException(
@@ -51,6 +34,9 @@ async def register_service(payload: ServiceCreate, db: AsyncSession = Depends(ge
         name=payload.name,
         base_url=str(payload.base_url),
         health_check_path=payload.health_check_path,
+        region=payload.region,
+        latency_zone=payload.latency_zone,
+        network_tags=payload.network_tags,
     )
     db.add(service)
     await db.commit()
@@ -60,7 +46,7 @@ async def register_service(payload: ServiceCreate, db: AsyncSession = Depends(ge
 
 @router.get("", response_model=RegistrySummary)
 async def list_services(db: AsyncSession = Depends(get_db)) -> RegistrySummary:
-    """Return every registered service along with an aggregate health summary."""
+    """Return every registered service with aggregate health summary."""
     result = await db.execute(select(Service).order_by(Service.name))
     services = result.scalars().all()
 
@@ -86,26 +72,18 @@ async def get_service(service_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     return service
 
 
-@router.patch("/{service_id}/status", response_model=ServiceRead, tags=["registry"])
+@router.patch("/{service_id}/status", response_model=ServiceRead)
 async def override_service_status(
     service_id: uuid.UUID,
     payload: StatusOverride,
     db: AsyncSession = Depends(get_db),
 ) -> Service:
-    """Manually override a service's health status.
-
-    Acts like an administrative 'shutdown' command — forces the routing
-    engine to treat this service as the specified status until the next
-    health-check cycle overwrites it. Primarily used for controlled
-    failover testing and emergency intervention.
-    """
+    """Manually override a service health status."""
     service = await db.get(Service, service_id)
     if service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found.")
 
     service.status = payload.status
-    # Reset failure counter when an admin manually restores a service,
-    # so it doesn't immediately get demoted again on the next check cycle.
     if payload.status == ServiceStatus.HEALTHY:
         service.consecutive_failures = 0
         service.last_error = None
@@ -117,7 +95,7 @@ async def override_service_status(
 
 @router.delete("/{service_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def deregister_service(service_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> None:
-    """Remove a service from the registry. It will no longer be health-checked or routed to."""
+    """Remove a service from the registry."""
     service = await db.get(Service, service_id)
     if service is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Service not found.")
