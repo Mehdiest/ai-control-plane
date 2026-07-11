@@ -42,9 +42,9 @@ app = FastAPI(
     title=settings.app_name,
     description=(
         "A lightweight control plane for AI services — service registry, "
-        "background health checking, and policy-based routing."
+        "health checking, network-aware policy routing, and per-tenant rate limiting."
     ),
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 

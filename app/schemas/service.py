@@ -1,9 +1,4 @@
-"""
-Pydantic schemas for the service registry API.
-
-Kept separate from the ORM model so the API contract can evolve
-independently of the database schema.
-"""
+"""Pydantic schemas for the service registry API."""
 
 import uuid
 from datetime import datetime
@@ -25,39 +20,20 @@ class ServiceCreate(BaseModel):
     @field_validator("health_check_path")
     @classmethod
     def ensure_leading_slash(cls, v: str) -> str:
-        """Guarantee the path starts with '/' so URL construction in the health
-        checker is always safe.
-
-        Without this, a value like 'health' would produce a malformed URL
-        (e.g. 'https://example.comhealth') instead of the intended
-        'https://example.com/health'.
-        """
+        """Prepend '/' if missing to prevent malformed URLs in the health checker."""
         return v if v.startswith("/") else f"/{v}"
 
-    # Network topology metadata — optional at registration time.
     region: str = Field(
         default="default",
         max_length=80,
         examples=["eu-west", "us-east", "on-premise"],
-        description="Logical or physical region where the service is hosted. "
-                    "Used by network-aware routing policies for data-residency enforcement.",
     )
-    latency_zone: LatencyZone = Field(
-        default=LatencyZone.MEDIUM,
-        description="Expected round-trip latency classification. "
-                    "The engine prefers lower-latency services when multiple candidates qualify.",
-    )
-    network_tags: list[str] = Field(
-        default_factory=list,
-        examples=[["cloud", "railway", "eu"]],
-        description="Free-form labels for routing constraints "
-                    "(e.g. 'on-premise', 'air-gapped', 'gpu'). "
-                    "Policies can require all specified tags to be present before routing.",
-    )
+    latency_zone: LatencyZone = Field(default=LatencyZone.MEDIUM)
+    network_tags: list[str] = Field(default_factory=list, examples=[["cloud", "railway"]])
 
 
 class ServiceRead(BaseModel):
-    """Public representation of a registered service, including live health and network data."""
+    """Public representation of a registered service."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -70,18 +46,15 @@ class ServiceRead(BaseModel):
     last_latency_ms: float | None
     last_checked_at: datetime | None
     last_error: str | None
-
-    # Network topology fields
     region: str
     latency_zone: LatencyZone
     network_tags: list[str]
-
     created_at: datetime
     updated_at: datetime
 
 
 class RegistrySummary(BaseModel):
-    """Aggregate view of the whole registry, useful for a dashboard landing view."""
+    """Aggregate view of the whole registry."""
 
     total: int
     healthy: int
