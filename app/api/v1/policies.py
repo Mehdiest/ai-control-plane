@@ -93,12 +93,47 @@ async def update_policy(
 
     Only fields explicitly supplied in the request body are modified;
     omitted fields retain their current values.
+
+    When priority or match_request_type are updated, the endpoint re-runs
+    the same conflict check that create_policy enforces — preventing two
+    active policies from sharing the same (request_type, priority) pair,
+    which would make routing order non-deterministic.
     """
     policy = await db.get(Policy, policy_id)
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found.")
 
     updates = payload.model_dump(exclude_unset=True)
+
+    # Determine the effective values after the update so the conflict check
+    # reflects the final state, not just what was submitted.
+    effective_request_type = updates.get("match_request_type", policy.match_request_type)
+    effective_priority = updates.get("priority", policy.priority)
+    effective_is_active = updates.get("is_active", policy.is_active)
+
+    # Only enforce uniqueness when the updated policy will be active — an
+    # inactive policy cannot participate in routing and needs no conflict check.
+    if effective_is_active and (
+        "priority" in updates or "match_request_type" in updates or "is_active" in updates
+    ):
+        conflict = await db.scalar(
+            select(Policy).where(
+                Policy.match_request_type == effective_request_type,
+                Policy.priority == effective_priority,
+                Policy.is_active.is_(True),
+                Policy.id != policy_id,   # exclude the policy being updated
+            )
+        )
+        if conflict is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"An active policy for request type '{effective_request_type}' "
+                    f"already uses priority {effective_priority}. "
+                    "Choose a different priority value."
+                ),
+            )
+
     for field, value in updates.items():
         setattr(policy, field, value)
 

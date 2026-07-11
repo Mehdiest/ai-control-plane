@@ -2,13 +2,19 @@
 ORM model representing a routing policy.
 
 A policy defines which service should handle a given request type,
-and what to fall back to if the primary target is unavailable —
-mirroring the role of a route-map with a fallback static route
-in traditional network policy-based routing.
+and what to fall back to if the primary target is unavailable.
 
-Policies are prioritised: the engine evaluates them in ascending
-priority order and applies the first match, the same way an ACL
-or route-map processes clauses top-to-bottom.
+Phase 2 introduced basic priority-based routing. This update adds
+network-aware match conditions — region and latency zone constraints
+that the engine evaluates alongside request type, mirroring how a
+route-map in traditional networking can match on both ACL and
+community attributes before applying a routing action.
+
+Evaluation order:
+  1. match_request_type  (required — like an ACL match)
+  2. match_region        (optional — like a BGP community filter)
+  3. match_latency_zone  (optional — like an OSPF cost preference)
+  4. priority            (tiebreaker when multiple policies match)
 """
 
 import uuid
@@ -36,13 +42,28 @@ class Policy(Base):
     # Lower number = evaluated first (like sequence numbers in a route-map).
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
-    # Match condition: the logical request category this policy applies to
-    # (e.g. "analytics", "copilot", "default"). The router compares this
-    # against the `request_type` field supplied by the caller.
+    # --- Match conditions ---
+
+    # Primary match: the logical request category (e.g. "analytics", "copilot").
+    # Always required — acts as the top-level classifier before network
+    # constraints are applied.
     match_request_type: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    # Routing targets — both reference the `name` column of the services table
-    # rather than the UUID so policies remain readable in plain SQL.
+    # Optional network match: restrict this policy to services in a specific
+    # region (e.g. "eu-west", "on-premise"). When set, the engine will only
+    # route to target services whose `region` field matches this value —
+    # useful for data-residency enforcement.
+    match_region: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+    # Optional network match: restrict this policy to services within a
+    # specific latency classification. When set, the engine skips any target
+    # whose `latency_zone` does not match — useful for latency-sensitive
+    # workloads that should never be routed to high-latency cold-start services.
+    match_latency_zone: Mapped[str | None] = mapped_column(String(20), nullable=True)
+
+    # --- Routing targets ---
+    # Both reference the `name` column of the services table rather than
+    # the UUID so policies remain human-readable in plain SQL.
     target_service_name: Mapped[str] = mapped_column(String(120), nullable=False)
     fallback_service_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
