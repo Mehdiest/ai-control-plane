@@ -8,6 +8,9 @@ services:
       REDIS_URL: redis://redis:6379/0
       JWT_SECRET_KEY: change-me-in-production
       JWT_ALGORITHM: HS256
+    # Run migrations before starting the app so the schema always exists.
+    command: >
+      sh -c "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"
     depends_on:
       db:
         condition: service_healthy
@@ -21,7 +24,7 @@ services:
       POSTGRES_PASSWORD: postgres
       POSTGRES_DB: control_plane
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - control_plane_pgdata:/var/lib/postgresql/data
     healthcheck:

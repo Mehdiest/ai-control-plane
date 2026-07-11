@@ -23,7 +23,7 @@ async def get_tenant_id(
 
         settings = get_settings()
         payload = jwt.decode(token, settings.jwt_secret_key, algorithms=[settings.jwt_algorithm])
-        tenant = payload.get("tenant_id", "anonymous")
+        tenant = payload.get("sub", "anonymous")
         return str(tenant)
     except Exception as exc:
         logger.warning("JWT decode failed: %s — falling back to anonymous.", exc)
