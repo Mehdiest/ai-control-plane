@@ -1,10 +1,4 @@
-"""
-Central application configuration.
-
-All environment-driven settings live here so the rest of the codebase
-never reads `os.environ` directly. This keeps configuration testable
-and makes it obvious, at a glance, what the control plane depends on.
-"""
+"""Central application configuration loaded from environment variables."""
 
 from functools import lru_cache
 
@@ -27,9 +21,15 @@ class Settings(BaseSettings):
     health_check_timeout_seconds: float = 5.0
     unhealthy_after_failures: int = 3
 
-    # --- Security (used from Phase 3 onward, defined early for forward compatibility) ---
+    # --- Security ---
     jwt_secret_key: str = "REDACTED"
     jwt_algorithm: str = "HS256"
+
+    # --- Redis ---
+    redis_url: str = "redis://localhost:6379/0"
+
+    # --- Rate limiting defaults ---
+    rate_limit_enabled: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
