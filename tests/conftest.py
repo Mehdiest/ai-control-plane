@@ -1,30 +1,31 @@
-"""
-Shared pytest fixtures for the AI Control Plane test suite.
-
-Uses an in-memory SQLite database so tests run without any external
-dependencies — no PostgreSQL, no Docker, no network calls.
-"""
+"""Shared pytest fixtures for the AI Control Plane test suite."""
 
 import asyncio
 import os
 
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
 
 # Point to SQLite before any app module is imported so the engine is
 # created with the right URL from the start.
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+os.environ.setdefault("REDIS_URL", "redis://localhost:6379/0")
+os.environ.setdefault("RATE_LIMIT_ENABLED", "true")
 
 from app.core.config import get_settings  # noqa: E402
 
 get_settings.cache_clear()
 
 import app.models.policy   # noqa: F401, E402 — registers Policy table with Base.metadata
+import app.models.quota    # noqa: F401, E402 — registers Quota table with Base.metadata
 import app.models.service  # noqa: F401, E402 — registers Service table with Base.metadata
 
 from app.core.database import AsyncSessionLocal, init_db  # noqa: E402
+from app.core.redis import set_redis_client  # noqa: E402
 from app.models.service import LatencyZone, Service, ServiceStatus  # noqa: E402
 from app.models.policy import Policy  # noqa: E402
+from app.models.quota import Quota  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -40,11 +41,23 @@ async def setup_database():
     """Re-create all tables before each test so tests are fully isolated."""
     await init_db()
     yield
-    # Truncate tables after each test without dropping them.
     async with AsyncSessionLocal() as session:
-        await session.execute(__import__("sqlalchemy").text("DELETE FROM policies"))
-        await session.execute(__import__("sqlalchemy").text("DELETE FROM services"))
+        await session.execute(text("DELETE FROM quotas"))
+        await session.execute(text("DELETE FROM policies"))
+        await session.execute(text("DELETE FROM services"))
         await session.commit()
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fake_redis():
+    """Inject a FakeRedis client so tests need no real Redis server."""
+    from fakeredis import aioredis as fake_aioredis
+
+    client = fake_aioredis.FakeRedis(decode_responses=True)
+    set_redis_client(client)
+    yield client
+    await client.aclose()
+    set_redis_client(None)  # type: ignore[arg-type]
 
 
 @pytest_asyncio.fixture

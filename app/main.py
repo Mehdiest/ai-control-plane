@@ -1,12 +1,4 @@
-"""
-AI Control Plane — application entrypoint.
-
-Phase 2 scope: policy-based routing engine on top of Phase 1's
-service registry and health checking. The policy engine evaluates
-routing rules in priority order and selects the healthiest available
-target — mirroring route-map / policy-based routing in traditional
-network infrastructure.
-"""
+"""AI Control Plane application entrypoint."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -15,7 +7,9 @@ from fastapi import FastAPI
 
 from app.api.v1 import api_router
 from app.core.config import get_settings
+from app.core.redis import close_redis
 from app.models import policy as _policy_model  # noqa: F401 — registers table with Base.metadata
+from app.models import quota as _quota_model  # noqa: F401 — registers table with Base.metadata
 from app.models import service as _service_model  # noqa: F401 — registers table with Base.metadata
 from app.services.health_checker import create_scheduler
 
@@ -27,11 +21,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Start the health-check scheduler on startup.
-
-    Database schema management is handled by Alembic migrations.
-    Run ``alembic upgrade head`` before starting the application.
-    """
+    """Start the health-check scheduler on startup."""
     scheduler = create_scheduler()
     scheduler.start()
     logger.info(
@@ -43,6 +33,9 @@ async def lifespan(app: FastAPI):
 
     scheduler.shutdown(wait=False)
     logger.info("Health check scheduler stopped.")
+
+    await close_redis()
+    logger.info("Redis connection closed.")
 
 
 app = FastAPI(

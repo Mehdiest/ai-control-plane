@@ -1,10 +1,4 @@
-"""
-Policy management and route-resolution endpoints.
-
-/api/v1/policies  — CRUD for routing policies.
-/api/v1/route     — Single endpoint that the caller hits to ask the control
-                    plane "which service should handle this request?".
-"""
+"""Policy CRUD and route-resolution endpoints."""
 
 import uuid
 
@@ -12,10 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import get_settings
 from app.core.database import get_db
+from app.core.security import get_tenant_id
 from app.models.policy import Policy
 from app.schemas.policy import PolicyCreate, PolicyRead, PolicyUpdate, RouteRequest, RouteResult
 from app.services.policy_engine import resolve_route
+from app.services.rate_limiter import check_rate_limit
 
 router = APIRouter()
 
@@ -31,13 +28,9 @@ router = APIRouter()
     tags=["policies"],
 )
 async def create_policy(payload: PolicyCreate, db: AsyncSession = Depends(get_db)) -> Policy:
-    """Register a new routing policy.
-
-    Priority values are unique per request type — a conflict raises 409
-    so the caller is forced to make the ordering explicit.
-    """
-    existing = await db.scalar(select(Policy).where(Policy.name == payload.name))
-    if existing is not None:
+    """Register a new routing policy with unique name and priority."""
+    existing_policy = await db.scalar(select(Policy).where(Policy.name == payload.name))
+    if existing_policy is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"A policy named '{payload.name}' already exists.",
@@ -89,42 +82,29 @@ async def get_policy(policy_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -
 async def update_policy(
     policy_id: uuid.UUID, payload: PolicyUpdate, db: AsyncSession = Depends(get_db)
 ) -> Policy:
-    """Partially update a policy (e.g. change priority, toggle active flag).
-
-    Only fields explicitly supplied in the request body are modified;
-    omitted fields retain their current values.
-
-    When priority or match_request_type are updated, the endpoint re-runs
-    the same conflict check that create_policy enforces — preventing two
-    active policies from sharing the same (request_type, priority) pair,
-    which would make routing order non-deterministic.
-    """
+    """Partially update a policy; re-checks priority uniqueness on active policies."""
     policy = await db.get(Policy, policy_id)
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found.")
 
     updates = payload.model_dump(exclude_unset=True)
 
-    # Determine the effective values after the update so the conflict check
-    # reflects the final state, not just what was submitted.
     effective_request_type = updates.get("match_request_type", policy.match_request_type)
     effective_priority = updates.get("priority", policy.priority)
     effective_is_active = updates.get("is_active", policy.is_active)
 
-    # Only enforce uniqueness when the updated policy will be active — an
-    # inactive policy cannot participate in routing and needs no conflict check.
     if effective_is_active and (
         "priority" in updates or "match_request_type" in updates or "is_active" in updates
     ):
-        conflict = await db.scalar(
+        priority_conflict = await db.scalar(
             select(Policy).where(
                 Policy.match_request_type == effective_request_type,
                 Policy.priority == effective_priority,
                 Policy.is_active.is_(True),
-                Policy.id != policy_id,   # exclude the policy being updated
+                Policy.id != policy_id,
             )
         )
-        if conflict is not None:
+        if priority_conflict is not None:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail=(
@@ -157,18 +137,28 @@ async def delete_policy(policy_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 # ---------------------------------------------------------------------------
 
 @router.post("/route", response_model=RouteResult, tags=["routing"])
-async def resolve(payload: RouteRequest, db: AsyncSession = Depends(get_db)) -> RouteResult:
-    """Ask the policy engine which service should handle a given request type.
+async def resolve(
+    payload: RouteRequest,
+    db: AsyncSession = Depends(get_db),
+    tenant_id: str = Depends(get_tenant_id),
+) -> RouteResult:
+    """Resolve a route by request type, checking rate limit before policy evaluation."""
+    settings = get_settings()
+    if settings.rate_limit_enabled:
+        rate_result = await check_rate_limit(tenant_id, db)
+        if not rate_result.allowed:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail=(
+                    f"Rate limit exceeded for tenant '{tenant_id}': "
+                    f"{rate_result.count}/{rate_result.quota.max_requests} requests in "
+                    f"{rate_result.quota.window_seconds}s window."
+                ),
+                headers={
+                    "Retry-After": str(rate_result.quota.window_seconds),
+                    "X-RateLimit-Limit": str(rate_result.quota.max_requests),
+                    "X-RateLimit-Remaining": "0",
+                },
+            )
 
-    The engine evaluates active policies in priority order and checks
-    live health status before committing to a route. The caller receives
-    a resolution code alongside the chosen service name so it can decide
-    how to handle degraded or unavailable outcomes.
-
-    Resolution codes:
-    - **primary**           — routed to the first-choice service.
-    - **fallback**          — primary was down; routed to the configured fallback.
-    - **no_policy**         — no active policy matches this request type.
-    - **no_healthy_service** — matching policies exist but all targets are unavailable.
-    """
     return await resolve_route(payload.request_type, db)
