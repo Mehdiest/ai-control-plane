@@ -21,6 +21,10 @@ class TrafficEntry(BaseModel):
     resolved_service: str
     resolution: str
     count: int
+    # Phase 5 — canary observability: the policy that handled these
+    # requests and its weight, so operators can verify the canary split.
+    policy_name: str | None = None
+    policy_weight: int | None = None
 
 
 class ErrorStats(BaseModel):

@@ -48,16 +48,27 @@ async def get_summary(db: AsyncSession) -> ObserveSummary:
 
 
 async def get_traffic(db: AsyncSession, hours: int = 1) -> list[TrafficEntry]:
-    """Return traffic distribution by resolution code within the time window."""
+    """Return traffic distribution by resolution code within the time window.
+
+    Phase 5 — includes the policy name and weight for each group so
+    operators can verify the canary split from the traffic dashboard.
+    """
     since = datetime.now(timezone.utc) - timedelta(hours=hours)
     result = await db.execute(
         select(
             RequestLog.resolved_service,
             RequestLog.resolution,
+            RequestLog.policy_name,
+            RequestLog.policy_weight,
             func.count().label("count"),
         )
         .where(RequestLog.created_at >= since)
-        .group_by(RequestLog.resolved_service, RequestLog.resolution)
+        .group_by(
+            RequestLog.resolved_service,
+            RequestLog.resolution,
+            RequestLog.policy_name,
+            RequestLog.policy_weight,
+        )
         .order_by(func.count().desc())
     )
     rows = result.all()
@@ -66,6 +77,8 @@ async def get_traffic(db: AsyncSession, hours: int = 1) -> list[TrafficEntry]:
             resolved_service=row.resolved_service,
             resolution=row.resolution,
             count=row.count,
+            policy_name=row.policy_name,
+            policy_weight=row.policy_weight,
         )
         for row in rows
     ]
