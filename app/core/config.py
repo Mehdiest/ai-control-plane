@@ -22,8 +22,11 @@ class Settings(BaseSettings):
     unhealthy_after_failures: int = 3
 
     # --- Security ---
-    jwt_secret_key: str = "REDACTED"
+    jwt_secret_key: str = "dev-only-unsafe-secret"
     jwt_algorithm: str = "HS256"
+    # When False, requests without a valid Bearer JWT are rejected with 401.
+    # Set to False in production to enforce authenticated access.
+    allow_anonymous_access: bool = True
 
     # --- Redis ---
     redis_url: str = "redis://localhost:6379/0"
