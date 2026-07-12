@@ -1,5 +1,6 @@
 """Policy CRUD and route-resolution endpoints."""
 
+import time
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -10,6 +11,7 @@ from app.core.config import get_settings
 from app.core.database import get_db
 from app.core.security import get_tenant_id
 from app.models.policy import Policy
+from app.models.request_log import RequestLog
 from app.schemas.policy import PolicyCreate, PolicyRead, PolicyUpdate, RouteRequest, RouteResult
 from app.services.policy_engine import resolve_route
 from app.services.rate_limiter import check_rate_limit
@@ -161,4 +163,19 @@ async def resolve(
                 },
             )
 
-    return await resolve_route(payload.request_type, db)
+    start = time.perf_counter()
+    result = await resolve_route(payload.request_type, db)
+    latency_ms = (time.perf_counter() - start) * 1000
+
+    # Persist the resolution for the observability dashboard.
+    log_entry = RequestLog(
+        tenant_id=tenant_id,
+        request_type=payload.request_type,
+        resolved_service=result.resolved_service or "none",
+        resolution=result.resolution,
+        latency_ms=round(latency_ms, 2),
+    )
+    db.add(log_entry)
+    await db.commit()
+
+    return result

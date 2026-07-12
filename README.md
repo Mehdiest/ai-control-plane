@@ -7,11 +7,11 @@
 ![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-2.0-D71F00?style=flat&logo=sqlalchemy&logoColor=white)
 ![Alembic](https://img.shields.io/badge/Alembic-1.18-6BA81E?style=flat)
 ![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=flat&logo=docker&logoColor=white)
-![Tests](https://img.shields.io/badge/Tests-37%20passed-brightgreen?style=flat&logo=pytest&logoColor=white)
+![Tests](https://img.shields.io/badge/Tests-43%20passed-brightgreen?style=flat&logo=pytest&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green?style=flat)
-![Status](https://img.shields.io/badge/Status-Phase%203%20Complete-blue?style=flat)
+![Status](https://img.shields.io/badge/Status-Phase%204%20Complete-blue?style=flat)
 
-A lightweight control plane for AI services — service registration, background health checking, network-aware policy-based routing, and per-tenant rate limiting. Applies control-plane / data-plane separation, topology-aware routing, and quota enforcement from traditional networking to AI infrastructure.
+A lightweight control plane for AI services — service registration, background health checking, network-aware policy-based routing, per-tenant rate limiting, and observability. Applies control-plane / data-plane separation, topology-aware routing, and quota enforcement from traditional networking to AI infrastructure.
 
 ## Origin
 
@@ -47,6 +47,14 @@ generic — it can register and govern any HTTP-based AI service.
 - **429 with Headers**: quota-exceeded responses include `Retry-After`, `X-RateLimit-Limit`, and `X-RateLimit-Remaining`.
 - **Quota Management API**: create, inspect (with live Redis counter), update, and reset quotas via REST.
 
+## Phase 4 — Observability Dashboard ✅
+
+- **Request Logging**: every call to `/route` is logged asynchronously (via `BackgroundTasks`) with tenant, request type, resolved service, resolution code, and latency — without adding to the critical path.
+- **Summary Endpoint**: snapshot of service health counts, active policy count, and request volume in the last hour.
+- **Traffic Metrics**: distribution of resolved services and resolution codes over a configurable time window.
+- **Error Metrics**: breakdown of error-class resolutions (`no_policy`, `no_healthy_service`) per service.
+- **Latency Metrics**: average routing latency per resolved service, ordered fastest first.
+
 ## Architecture
 
 ```
@@ -66,28 +74,31 @@ Request → JWT decode → tenant_id
              → primary / fallback / fallthrough
                     │
            Downstream AI Service
+                    │
+             BackgroundTask
+             → RequestLog (DB)
 ```
 
 ```
-┌──────────────────────────────────────────────────┐
-│                FastAPI Application                 │
-│  ┌────────────┐ ┌─────────────┐ ┌──────────────┐ │
-│  │ Registry   │ │  Policies   │ │   Quotas     │ │
-│  │ API        │ │  + /route   │ │   API        │ │
-│  └────────────┘ └─────────────┘ └──────────────┘ │
-│  ┌──────────────────────────────────────────────┐ │
-│  │        APScheduler — Health Check Cycle       │ │
-│  └──────────────────────────────────────────────┘ │
-│  ┌──────────────────────────────────────────────┐ │
-│  │   Policy Engine + Rate Limiter                │ │
-│  └──────────────────────────────────────────────┘ │
-└───────────────────┬──────────────────────────────-┘
+┌──────────────────────────────────────────────────────┐
+│                  FastAPI Application                   │
+│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌─────────┐ │
+│  │ Registry │ │ Policies │ │  Quotas  │ │ Observe │ │
+│  │   API    │ │ + /route │ │   API    │ │   API   │ │
+│  └──────────┘ └──────────┘ └──────────┘ └─────────┘ │
+│  ┌────────────────────────────────────────────────┐   │
+│  │       APScheduler — Health Check Cycle          │   │
+│  └────────────────────────────────────────────────┘   │
+│  ┌────────────────────────────────────────────────┐   │
+│  │   Policy Engine + Rate Limiter + Observer       │   │
+│  └────────────────────────────────────────────────┘   │
+└───────────────────┬────────────────────────────────---┘
                     │
        ┌────────────┴────────────┐
        ▼                         ▼
   PostgreSQL + Alembic         Redis 7
   (services, policies,         (rate limit counters)
-   quotas)
+   quotas, request_logs)
 ```
 
 ## Network Topology Model
@@ -119,42 +130,47 @@ Request → JWT decode → tenant_id
 ```
 ai-control-plane/
 ├── alembic/
-│   ├── env.py                      # reads DATABASE_URL from .env, sync driver
-│   └── versions/                   # auto-generated migration files
+│   ├── env.py
+│   └── versions/
 ├── app/
 │   ├── api/v1/
 │   │   ├── __init__.py
-│   │   ├── registry.py             # service CRUD + status override
-│   │   ├── policies.py             # policy CRUD + /route (with rate limit gate)
-│   │   └── quotas.py               # quota CRUD + live counter + reset
+│   │   ├── registry.py         # service CRUD + status override
+│   │   ├── policies.py         # policy CRUD + /route (rate limit + logging)
+│   │   ├── quotas.py           # quota CRUD + live counter + reset
+│   │   └── observe.py          # summary, traffic, errors, latency endpoints
 │   ├── core/
-│   │   ├── config.py               # environment-driven settings
-│   │   ├── database.py             # async SQLAlchemy engine + session
-│   │   ├── redis.py                # async Redis client + lifespan management
-│   │   └── security.py             # JWT decode → tenant_id dependency
+│   │   ├── config.py
+│   │   ├── database.py
+│   │   ├── redis.py
+│   │   └── security.py         # JWT → tenant_id
 │   ├── models/
-│   │   ├── service.py              # Service + ServiceStatus + LatencyZone
-│   │   ├── policy.py               # Policy with network match conditions
-│   │   └── quota.py                # Quota per tenant
+│   │   ├── service.py          # Service + ServiceStatus + LatencyZone
+│   │   ├── policy.py           # Policy with network match conditions
+│   │   ├── quota.py            # Quota per tenant
+│   │   └── request_log.py      # RequestLog for observability
 │   ├── schemas/
-│   │   ├── service.py              # service schemas + path validator
-│   │   ├── policy.py               # policy schemas + RouteResult
-│   │   └── quota.py                # quota schemas + live status
+│   │   ├── service.py
+│   │   ├── policy.py
+│   │   ├── quota.py
+│   │   └── observe.py          # ObserveSummary, TrafficEntry, ErrorStats, LatencyStats
 │   ├── services/
-│   │   ├── health_checker.py       # background health-check engine
-│   │   ├── policy_engine.py        # two-stage routing: request → topology
-│   │   └── rate_limiter.py         # Redis fixed-window counter
-│   └── main.py                     # entrypoint + lifespan
+│   │   ├── health_checker.py
+│   │   ├── policy_engine.py
+│   │   ├── rate_limiter.py
+│   │   └── observer.py         # read-only query aggregations
+│   └── main.py
 ├── tests/
-│   ├── conftest.py                 # SQLite in-memory + fakeredis fixtures
-│   ├── test_health_checker.py      # status transitions + path validation (7)
-│   ├── test_policy_conflicts.py    # priority conflict validation (4)
-│   ├── test_policy_engine.py       # routing + topology constraints (13)
-│   └── test_rate_limiter.py        # quota enforcement + CRUD (13)
+│   ├── conftest.py
+│   ├── test_health_checker.py  # 7 tests
+│   ├── test_policy_conflicts.py # 4 tests
+│   ├── test_policy_engine.py   # 13 tests
+│   ├── test_rate_limiter.py    # 13 tests
+│   └── test_observe.py         # 6 tests
 ├── pytest.ini
 ├── requirements.txt
 ├── Dockerfile
-├── docker-compose.yml              # PostgreSQL + Redis
+├── docker-compose.yml
 └── .env.example
 ```
 
@@ -162,14 +178,14 @@ ai-control-plane/
 
 ### Prerequisites
 - Python 3.12+
-- Docker (for PostgreSQL + Redis)
+- PostgreSQL 18+
+- Redis 7+ (or `docker run -d --name redis -p 6379:6379 redis:7-alpine`)
 
 ### Local setup
 ```bash
 cp .env.example .env
 # edit DATABASE_URL, REDIS_URL, JWT_SECRET_KEY in .env
 pip install -r requirements.txt
-docker-compose up -d db redis
 alembic upgrade head
 uvicorn app.main:app --reload
 ```
@@ -210,7 +226,7 @@ python -m pytest tests/ -v --timeout=15
 | `GET` | `/api/v1/policies/{id}` | Fetch a single policy |
 | `PATCH` | `/api/v1/policies/{id}` | Update a policy (conflict-checked) |
 | `DELETE` | `/api/v1/policies/{id}` | Delete a policy |
-| `POST` | `/api/v1/route` | Resolve which service handles a request (rate-limited) |
+| `POST` | `/api/v1/route` | Resolve which service handles a request (rate-limited + logged) |
 
 ### Quotas
 
@@ -220,6 +236,15 @@ python -m pytest tests/ -v --timeout=15
 | `GET` | `/api/v1/quotas/{tenant_id}` | Fetch quota + live Redis counter |
 | `PATCH` | `/api/v1/quotas/{tenant_id}` | Update quota limits or active flag |
 | `DELETE` | `/api/v1/quotas/{tenant_id}/counter` | Reset the Redis counter for a tenant |
+
+### Observability
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/v1/observe/summary` | Snapshot: service health, active policies, request volume |
+| `GET` | `/api/v1/observe/traffic?hours=1` | Traffic distribution by service and resolution |
+| `GET` | `/api/v1/observe/errors?hours=1` | Error breakdown by service |
+| `GET` | `/api/v1/observe/latency?hours=1` | Average latency per service |
 
 ### Meta
 
@@ -232,7 +257,7 @@ python -m pytest tests/ -v --timeout=15
 - ✅ **Phase 1** — Service Registry & Health Checking
 - ✅ **Phase 2** — Policy-Based Routing with Network-Aware Constraints
 - ✅ **Phase 3** — Rate Limiting & Quota per Tenant
-- 🔲 **Phase 4** — Observability Dashboard (traffic distribution, error rates, latency trends)
+- ✅ **Phase 4** — Observability Dashboard
 - 🔲 **Phase 5** — Canary Rollout support
 
 ## License
