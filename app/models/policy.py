@@ -10,12 +10,20 @@ that the engine evaluates alongside request type, mirroring how a
 route-map in traditional networking can match on both ACL and
 community attributes before applying a routing action.
 
-Evaluation order:
-  1. match_request_type  (required — like an ACL match)
-  2. match_region        (optional — like a BGP community filter)
-  3. match_latency_zone  (optional — like an OSPF cost preference)
-  4. priority            (tiebreaker when multiple policies match)
-"""
+ Evaluation order:
+   1. match_request_type  (required — like an ACL match)
+   2. match_region        (optional — like a BGP community filter)
+   3. match_latency_zone  (optional — like an OSPF cost preference)
+   4. priority            (groups policies — lower group evaluated first)
+   5. weight              (canary split within a priority group)
+
+ Phase 5 — Canary Rollout:
+   Multiple active policies may now share the same priority. Within a
+   priority group, `weight` controls what fraction of traffic each policy
+   receives (e.g. weight=95 → ~95%). A weight of 0 effectively removes a
+   policy from the canary split without deleting it — useful for instant
+   rollback.
+ """
 
 import uuid
 from datetime import datetime
@@ -41,6 +49,13 @@ class Policy(Base):
 
     # Lower number = evaluated first (like sequence numbers in a route-map).
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
+
+    # Traffic share within a priority group (Phase 5 canary rollout).
+    # When multiple active policies share the same priority, the engine
+    # uses weighted random selection: a policy with weight=95 receives
+    # ~95% of traffic, weight=5 receives ~5%. A weight of 0 removes the
+    # policy from the canary split entirely — instant rollback.
+    weight: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
     # --- Match conditions ---
 

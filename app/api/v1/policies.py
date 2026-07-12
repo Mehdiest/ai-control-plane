@@ -12,7 +12,14 @@ from app.core.database import get_db
 from app.core.security import get_tenant_id
 from app.models.policy import Policy
 from app.models.request_log import RequestLog
-from app.schemas.policy import PolicyCreate, PolicyRead, PolicyUpdate, RouteRequest, RouteResult
+from app.schemas.policy import (
+    PolicyCreate,
+    PolicyRead,
+    PolicyUpdate,
+    PolicyWeightUpdate,
+    RouteRequest,
+    RouteResult,
+)
 from app.services.policy_engine import resolve_route
 from app.services.rate_limiter import check_rate_limit
 
@@ -30,29 +37,17 @@ router = APIRouter()
     tags=["policies"],
 )
 async def create_policy(payload: PolicyCreate, db: AsyncSession = Depends(get_db)) -> Policy:
-    """Register a new routing policy with unique name and priority."""
+    """Register a new routing policy with a unique name.
+
+    Phase 5 — Canary Rollout: multiple active policies may now share the same
+    priority (forming a canary group). Within a group, `weight` controls the
+    traffic split. The old priority-uniqueness constraint has been removed.
+    """
     existing_policy = await db.scalar(select(Policy).where(Policy.name == payload.name))
     if existing_policy is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"A policy named '{payload.name}' already exists.",
-        )
-
-    priority_conflict = await db.scalar(
-        select(Policy).where(
-            Policy.match_request_type == payload.match_request_type,
-            Policy.priority == payload.priority,
-            Policy.is_active.is_(True),
-        )
-    )
-    if priority_conflict is not None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=(
-                f"An active policy for request type '{payload.match_request_type}' "
-                f"already uses priority {payload.priority}. "
-                "Choose a different priority value."
-            ),
         )
 
     policy = Policy(**payload.model_dump())
@@ -84,41 +79,50 @@ async def get_policy(policy_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -
 async def update_policy(
     policy_id: uuid.UUID, payload: PolicyUpdate, db: AsyncSession = Depends(get_db)
 ) -> Policy:
-    """Partially update a policy; re-checks priority uniqueness on active policies."""
+    """Partially update a policy.
+
+    Phase 5 — Canary Rollout: the priority-uniqueness re-check has been
+    removed. Multiple active policies may now share a priority to form a
+    canary group; `weight` controls the split within the group.
+    """
     policy = await db.get(Policy, policy_id)
     if policy is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found.")
 
     updates = payload.model_dump(exclude_unset=True)
 
-    effective_request_type = updates.get("match_request_type", policy.match_request_type)
-    effective_priority = updates.get("priority", policy.priority)
-    effective_is_active = updates.get("is_active", policy.is_active)
-
-    if effective_is_active and (
-        "priority" in updates or "match_request_type" in updates or "is_active" in updates
-    ):
-        priority_conflict = await db.scalar(
-            select(Policy).where(
-                Policy.match_request_type == effective_request_type,
-                Policy.priority == effective_priority,
-                Policy.is_active.is_(True),
-                Policy.id != policy_id,
-            )
-        )
-        if priority_conflict is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail=(
-                    f"An active policy for request type '{effective_request_type}' "
-                    f"already uses priority {effective_priority}. "
-                    "Choose a different priority value."
-                ),
-            )
-
     for field, value in updates.items():
         setattr(policy, field, value)
 
+    await db.commit()
+    await db.refresh(policy)
+    return policy
+
+
+@router.patch(
+    "/policies/{policy_id}/weight",
+    response_model=PolicyRead,
+    tags=["policies"],
+    summary="Adjust canary weight (rapid promotion/rollback)",
+)
+async def update_policy_weight(
+    policy_id: uuid.UUID,
+    payload: PolicyWeightUpdate,
+    db: AsyncSession = Depends(get_db),
+) -> Policy:
+    """Lightweight weight-only update for canary promotion/rollback.
+
+    This endpoint is optimised for the operational workflow of shifting
+    traffic during a canary rollout: 5% → 50% → 100% to promote, or
+    5% → 0 to instantly roll back a failing canary. It avoids the full
+    PATCH body and the priority-uniqueness re-check, since weight changes
+    never affect priority ordering.
+    """
+    policy = await db.get(Policy, policy_id)
+    if policy is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Policy not found.")
+
+    policy.weight = payload.weight
     await db.commit()
     await db.refresh(policy)
     return policy
@@ -168,11 +172,15 @@ async def resolve(
     latency_ms = (time.perf_counter() - start) * 1000
 
     # Persist the resolution for the observability dashboard.
+    # Phase 5 — record which policy handled the request and its canary
+    # weight so the traffic dashboard can show the canary split.
     log_entry = RequestLog(
         tenant_id=tenant_id,
         request_type=payload.request_type,
         resolved_service=result.resolved_service or "none",
         resolution=result.resolution,
+        policy_name=result.policy_name,
+        policy_weight=result.policy_weight,
         latency_ms=round(latency_ms, 2),
     )
     db.add(log_entry)

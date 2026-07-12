@@ -18,6 +18,18 @@ class PolicyCreate(BaseModel):
 
     name: str = Field(..., min_length=1, max_length=120, examples=["prefer-eu-low-latency"])
     priority: int = Field(default=100, ge=1, le=9999, examples=[1])
+    weight: int = Field(
+        default=100,
+        ge=0,
+        le=1000,
+        examples=[95],
+        description=(
+            "Traffic share within a priority group (Phase 5 canary rollout). "
+            "When multiple active policies share the same priority, the engine "
+            "uses weighted random selection. A weight of 0 removes the policy "
+            "from the canary split — instant rollback."
+        ),
+    )
     match_request_type: str = Field(
         ..., min_length=1, max_length=100, examples=["analytics"]
     )
@@ -45,12 +57,29 @@ class PolicyUpdate(BaseModel):
     """Partial update payload — all fields optional."""
 
     priority: int | None = Field(default=None, ge=1, le=9999)
+    weight: int | None = Field(
+        default=None,
+        ge=0,
+        le=1000,
+        description="Traffic share within a priority group (canary rollout).",
+    )
     match_request_type: str | None = Field(default=None, min_length=1, max_length=100)
     match_region: str | None = None
     match_latency_zone: LatencyZone | None = None
     target_service_name: str | None = Field(default=None, min_length=1, max_length=120)
     fallback_service_name: str | None = None
     is_active: bool | None = None
+
+
+class PolicyWeightUpdate(BaseModel):
+    """Lightweight payload for the canary weight-adjustment endpoint.
+
+    Designed for rapid canary promotion/rollback without a full PATCH —
+    e.g. shift traffic 5% → 50% → 100% as confidence grows, or 5% → 0
+    to instantly roll back a failing canary.
+    """
+
+    weight: int = Field(..., ge=0, le=1000, examples=[10])
 
 
 class PolicyRead(BaseModel):
@@ -61,6 +90,7 @@ class PolicyRead(BaseModel):
     id: uuid.UUID
     name: str
     priority: int
+    weight: int
     match_request_type: str
     match_region: str | None
     match_latency_zone: str | None
@@ -93,6 +123,10 @@ class RouteResult(BaseModel):
     )
     policy_name: str | None = Field(
         default=None, description="Name of the matched policy, if any."
+    )
+    policy_weight: int | None = Field(
+        default=None,
+        description="Weight of the matched policy within its priority group (canary rollout).",
     )
     resolved_region: str | None = Field(
         default=None, description="Region of the resolved service."
