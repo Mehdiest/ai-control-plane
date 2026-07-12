@@ -20,6 +20,7 @@ from app.core.database import Base
 # Import models so their tables are registered on Base.metadata.
 import app.models.policy  # noqa: F401
 import app.models.quota   # noqa: F401
+import app.models.request_log  # noqa: F401
 import app.models.service  # noqa: F401
 
 # --- Alembic config --------------------------------------------------------

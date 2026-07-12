@@ -10,6 +10,7 @@ from app.core.config import get_settings
 from app.core.redis import close_redis
 from app.models import policy as _policy_model  # noqa: F401 — registers table with Base.metadata
 from app.models import quota as _quota_model  # noqa: F401 — registers table with Base.metadata
+from app.models import request_log as _request_log_model  # noqa: F401 — registers table with Base.metadata
 from app.models import service as _service_model  # noqa: F401 — registers table with Base.metadata
 from app.services.health_checker import create_scheduler
 

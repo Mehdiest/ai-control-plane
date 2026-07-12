@@ -19,6 +19,7 @@ get_settings.cache_clear()
 
 import app.models.policy   # noqa: F401, E402 — registers Policy table with Base.metadata
 import app.models.quota    # noqa: F401, E402 — registers Quota table with Base.metadata
+import app.models.request_log  # noqa: F401, E402 — registers RequestLog table with Base.metadata
 import app.models.service  # noqa: F401, E402 — registers Service table with Base.metadata
 
 from app.core.database import AsyncSessionLocal, init_db  # noqa: E402
@@ -26,6 +27,7 @@ from app.core.redis import set_redis_client  # noqa: E402
 from app.models.service import LatencyZone, Service, ServiceStatus  # noqa: E402
 from app.models.policy import Policy  # noqa: E402
 from app.models.quota import Quota  # noqa: E402
+from app.models.request_log import RequestLog  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -42,6 +44,7 @@ async def setup_database():
     await init_db()
     yield
     async with AsyncSessionLocal() as session:
+        await session.execute(text("DELETE FROM request_logs"))
         await session.execute(text("DELETE FROM quotas"))
         await session.execute(text("DELETE FROM policies"))
         await session.execute(text("DELETE FROM services"))
