@@ -270,7 +270,7 @@ python -m pytest tests/ -v --timeout=15
 - ✅ **Phase 4** — Observability Dashboard
 - ✅ **Phase 5** — Canary Rollout with Weighted Traffic Splitting
 
-$limitation = @'
+
 
 ## Known Limitations
 
