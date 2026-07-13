@@ -1,34 +1,9 @@
-"""
-ORM model representing a routing policy.
-
-A policy defines which service should handle a given request type,
-and what to fall back to if the primary target is unavailable.
-
-Phase 2 introduced basic priority-based routing. This update adds
-network-aware match conditions — region and latency zone constraints
-that the engine evaluates alongside request type, mirroring how a
-route-map in traditional networking can match on both ACL and
-community attributes before applying a routing action.
-
- Evaluation order:
-   1. match_request_type  (required — like an ACL match)
-   2. match_region        (optional — like a BGP community filter)
-   3. match_latency_zone  (optional — like an OSPF cost preference)
-   4. priority            (groups policies — lower group evaluated first)
-   5. weight              (canary split within a priority group)
-
- Phase 5 — Canary Rollout:
-   Multiple active policies may now share the same priority. Within a
-   priority group, `weight` controls what fraction of traffic each policy
-   receives (e.g. weight=95 → ~95%). A weight of 0 effectively removes a
-   policy from the canary split without deleting it — useful for instant
-   rollback.
- """
+"""ORM model representing a routing policy."""
 
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Integer, String, func
+from sqlalchemy import Boolean, DateTime, Integer, JSON, String, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -43,47 +18,32 @@ class Policy(Base):
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
-
-    # Human-readable identifier, unique across all policies.
     name: Mapped[str] = mapped_column(String(120), unique=True, index=True, nullable=False)
-
-    # Lower number = evaluated first (like sequence numbers in a route-map).
     priority: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
-    # Traffic share within a priority group (Phase 5 canary rollout).
-    # When multiple active policies share the same priority, the engine
-    # uses weighted random selection: a policy with weight=95 receives
-    # ~95% of traffic, weight=5 receives ~5%. A weight of 0 removes the
-    # policy from the canary split entirely — instant rollback.
+    # Traffic share within a priority group (canary rollout).
+    # weight=0 removes the policy from canary split — instant rollback.
     weight: Mapped[int] = mapped_column(Integer, default=100, nullable=False)
 
     # --- Match conditions ---
 
-    # Primary match: the logical request category (e.g. "analytics", "copilot").
-    # Always required — acts as the top-level classifier before network
-    # constraints are applied.
+    # Required: top-level request classifier (like an ACL match in a route-map).
     match_request_type: Mapped[str] = mapped_column(String(100), nullable=False)
 
-    # Optional network match: restrict this policy to services in a specific
-    # region (e.g. "eu-west", "on-premise"). When set, the engine will only
-    # route to target services whose `region` field matches this value —
-    # useful for data-residency enforcement.
+    # Optional: restrict to services in a specific region (BGP community-style filter).
     match_region: Mapped[str | None] = mapped_column(String(80), nullable=True)
 
-    # Optional network match: restrict this policy to services within a
-    # specific latency classification. When set, the engine skips any target
-    # whose `latency_zone` does not match — useful for latency-sensitive
-    # workloads that should never be routed to high-latency cold-start services.
+    # Optional: restrict to services in a specific latency class (OSPF cost-style).
     match_latency_zone: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # Optional: all listed tags must be present on the target service
+    # (BGP extended community matching — every community must match).
+    match_network_tags: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
+
     # --- Routing targets ---
-    # Both reference the `name` column of the services table rather than
-    # the UUID so policies remain human-readable in plain SQL.
     target_service_name: Mapped[str] = mapped_column(String(120), nullable=False)
     fallback_service_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
 
-    # Disabled policies are stored but skipped during routing evaluation,
-    # allowing safe rollback without deletion.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(

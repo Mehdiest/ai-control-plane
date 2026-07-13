@@ -38,10 +38,14 @@ async def check_rate_limit(
     redis = get_redis()
     key, window_start = _build_key(tenant_id, quota.window_seconds)
 
+    # Atomic window initialisation: SET with NX only creates the key (value=0)
+    # and sets the TTL in one round-trip, eliminating the race where INCR
+    # succeeds but EXPIRE never runs (TTL leak).  The subsequent INCR is
+    # itself atomic, so the count is always accurate.
+    await redis.set(key, 0, ex=quota.window_seconds, nx=True)
     count = await redis.incr(key)
 
     if count == 1:
-        await redis.expire(key, quota.window_seconds)
         logger.debug("New rate-limit window for tenant '%s' (key=%s).", tenant_id, key)
 
     if count > quota.max_requests:

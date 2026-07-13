@@ -1,4 +1,4 @@
-services:
+﻿services:
   control-plane:
     build: .
     ports:
@@ -6,7 +6,7 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/control_plane
       REDIS_URL: redis://redis:6379/0
-      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set — see .env.example}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:?JWT_SECRET_KEY must be set â€” see .env.example}
       JWT_ALGORITHM: ${JWT_ALGORITHM:-HS256}
       ALLOW_ANONYMOUS_ACCESS: ${ALLOW_ANONYMOUS_ACCESS:-true}
     # Run migrations before starting the app so the schema always exists.
@@ -19,7 +19,7 @@ services:
         condition: service_healthy
 
   db:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}

@@ -1,4 +1,4 @@
-"""AI Control Plane application entrypoint."""
+﻿"""AI Control Plane application entrypoint."""
 
 import logging
 from contextlib import asynccontextmanager
@@ -8,10 +8,10 @@ from fastapi import FastAPI
 from app.api.v1 import api_router
 from app.core.config import get_settings
 from app.core.redis import close_redis
-from app.models import policy as _policy_model  # noqa: F401 — registers table with Base.metadata
-from app.models import quota as _quota_model  # noqa: F401 — registers table with Base.metadata
-from app.models import request_log as _request_log_model  # noqa: F401 — registers table with Base.metadata
-from app.models import service as _service_model  # noqa: F401 — registers table with Base.metadata
+from app.models import policy as _policy_model  # noqa: F401 â€” registers table with Base.metadata
+from app.models import quota as _quota_model  # noqa: F401 â€” registers table with Base.metadata
+from app.models import request_log as _request_log_model  # noqa: F401 â€” registers table with Base.metadata
+from app.models import service as _service_model  # noqa: F401 â€” registers table with Base.metadata
 from app.services.health_checker import create_scheduler
 
 logging.basicConfig(level=logging.INFO)
@@ -42,10 +42,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.app_name,
     description=(
-        "A lightweight control plane for AI services — service registry, "
+        "A lightweight control plane for AI services â€” service registry, "
         "health checking, network-aware policy routing, and per-tenant rate limiting."
     ),
-    version="0.3.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 

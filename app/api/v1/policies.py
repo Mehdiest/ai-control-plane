@@ -1,14 +1,15 @@
 """Policy CRUD and route-resolution endpoints."""
 
+import logging
 import time
 import uuid
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import get_settings
-from app.core.database import get_db
+from app.core.database import AsyncSessionLocal, get_db
 from app.core.security import get_tenant_id
 from app.models.policy import Policy
 from app.models.request_log import RequestLog
@@ -23,7 +24,40 @@ from app.schemas.policy import (
 from app.services.policy_engine import resolve_route
 from app.services.rate_limiter import check_rate_limit
 
+logger = logging.getLogger("control_plane.policies")
+
 router = APIRouter()
+
+
+async def _persist_request_log(
+    tenant_id: str,
+    request_type: str,
+    resolved_service: str,
+    resolution: str,
+    policy_name: str | None,
+    policy_weight: int | None,
+    latency_ms: float,
+) -> None:
+    """Persist a request-log row in the background (off the critical path).
+
+    Uses a dedicated session so it does not depend on the request-scoped
+    session, which is closed as soon as the response is sent.
+    """
+    try:
+        async with AsyncSessionLocal() as session:
+            log_entry = RequestLog(
+                tenant_id=tenant_id,
+                request_type=request_type,
+                resolved_service=resolved_service,
+                resolution=resolution,
+                policy_name=policy_name,
+                policy_weight=policy_weight,
+                latency_ms=latency_ms,
+            )
+            session.add(log_entry)
+            await session.commit()
+    except Exception:
+        logger.exception("Failed to persist request log (background).")
 
 
 # ---------------------------------------------------------------------------
@@ -145,6 +179,7 @@ async def delete_policy(policy_id: uuid.UUID, db: AsyncSession = Depends(get_db)
 @router.post("/route", response_model=RouteResult, tags=["routing"])
 async def resolve(
     payload: RouteRequest,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
     tenant_id: str = Depends(get_tenant_id),
 ) -> RouteResult:
@@ -171,10 +206,12 @@ async def resolve(
     result = await resolve_route(payload.request_type, db)
     latency_ms = (time.perf_counter() - start) * 1000
 
-    # Persist the resolution for the observability dashboard.
-    # Phase 5 — record which policy handled the request and its canary
+    # Persist the resolution for the observability dashboard via a background
+    # task so the critical path (response latency) is not blocked by the DB
+    # write.  Phase 5 — record which policy handled the request and its canary
     # weight so the traffic dashboard can show the canary split.
-    log_entry = RequestLog(
+    background_tasks.add_task(
+        _persist_request_log,
         tenant_id=tenant_id,
         request_type=payload.request_type,
         resolved_service=result.resolved_service or "none",
@@ -183,7 +220,5 @@ async def resolve(
         policy_weight=result.policy_weight,
         latency_ms=round(latency_ms, 2),
     )
-    db.add(log_entry)
-    await db.commit()
 
     return result

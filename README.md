@@ -270,6 +270,29 @@ python -m pytest tests/ -v --timeout=15
 - ✅ **Phase 4** — Observability Dashboard
 - ✅ **Phase 5** — Canary Rollout with Weighted Traffic Splitting
 
+$limitation = @'
+
+## Known Limitations
+
+**Rate limiting — fixed-window algorithm**
+The current implementation uses a fixed-window counter. This means up to `2 × max_requests` can pass through at the boundary between two windows (burst at the end of window N + start of window N+1). A sliding-window or token-bucket algorithm would eliminate this. Acceptable for the current scale; noted here for transparency.
+
+**Single-instance scheduler**
+The APScheduler health-check job runs inside the app process. Running multiple replicas will cause each instance to independently probe downstream services and write status updates concurrently — producing redundant probes and potential write contention. For HA deployments, the scheduler should be extracted to a separate worker or use leader-election.
+
+**Decision plane only — no data plane**
+`/route` returns the name of the target service; it does not proxy the request. Callers are responsible for forwarding traffic to the resolved service. This is intentional for the current scope but means the control plane is advisory, not intercepting.
+
+**In-memory cache absent**
+Every `/route` call hits PostgreSQL for policy and service lookups. Under high request rates, the DB becomes the bottleneck. A short-lived in-memory cache (e.g. per-process TTL cache on policies) would significantly improve throughput.
+
+**Canary routing is stateless**
+Traffic splitting uses `random.choices()` per request with no session affinity. A single user may be routed to both stable and canary versions across consecutive requests. For use cases requiring sticky routing, a hash of `tenant_id` or session identifier should replace the pure random selection.
+'@
+
+Add-Content C:\ai-control-plane\README.md $limitation
+
+
 ## License
 
 MIT

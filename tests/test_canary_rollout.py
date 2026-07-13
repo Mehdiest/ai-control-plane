@@ -77,7 +77,6 @@ async def test_canary_weighted_distribution(async_client):
         resp = await async_client.post(
             "/api/v1/route",
             json={"request_type": "analytics"},
-            headers={"Authorization": "Bearer test-token"},
         )
         assert resp.status_code == 200
         svc = resp.json()["resolved_service"]
@@ -127,7 +126,6 @@ async def test_canary_rollback_weight_zero(async_client):
         resp = await async_client.post(
             "/api/v1/route",
             json={"request_type": "analytics"},
-            headers={"Authorization": "Bearer test-token"},
         )
         assert resp.status_code == 200
         assert resp.json()["resolved_service"] == "canary-svc"
@@ -216,7 +214,6 @@ async def test_traffic_shows_policy_weight(async_client):
         await async_client.post(
             "/api/v1/route",
             json={"request_type": "analytics"},
-            headers={"Authorization": "Bearer test-token"},
         )
 
     resp = await async_client.get("/api/v1/observe/traffic?hours=1")
@@ -262,7 +259,6 @@ async def test_priority_groups_with_weights(async_client):
         resp = await async_client.post(
             "/api/v1/route",
             json={"request_type": "analytics"},
-            headers={"Authorization": "Bearer test-token"},
         )
         assert resp.status_code == 200
         svc = resp.json()["resolved_service"]

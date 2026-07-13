@@ -44,7 +44,6 @@ async def test_route_logs_request(async_client):
     resp = await async_client.post(
         "/api/v1/route",
         json={"request_type": "analytics"},
-        headers={"Authorization": "Bearer test-token"},
     )
     assert resp.status_code == 200
 
